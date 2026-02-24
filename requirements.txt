@@ -1,4 +1,0 @@
-akshare
-ccxt
-pandas
-pandas-ta
