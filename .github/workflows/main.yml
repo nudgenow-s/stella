@@ -1,0 +1,29 @@
+name: Stella Quantum Radar Final
+
+on:
+  schedule:
+    - cron: '30 7 * * *' # 北京时间 15:30 自动扫A股与基因
+    - cron: '*/30 * * * *' # 每30分钟扫一次币圈（GitHub免费额度限制）
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install
+        run: pip install akshare ccxt pandas pandas-ta
+      - name: Run
+        run: python stella_radar.py
+      - name: Deploy
+        run: |
+          git config --global user.name "Stella-Bot"
+          git config --global user.email "stella-bot@users.noreply.github.com"
+          git add index.html
+          git commit -m "Radar Insight Update: $(date)" || exit 0
+          git push origin main
