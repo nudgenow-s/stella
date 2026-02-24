@@ -16,13 +16,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11' # 强制升级 Python 到 3.11
+          python-version: '3.12' # 直接给它最高版本环境
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas==2.2.2 # 锁定稳定的 pandas 版本
-          pip install akshare ccxt pandas-ta # 这次环境一致了，不会再报错
+      - name: Install
+        run: pip install akshare ccxt pandas # 只装这三个最稳的
+
           
       - name: Run Radar
         run: python stella_radar.py
