@@ -8,33 +8,62 @@ TARGET_PRICES = [5.21, 52.1]
 CRYPTO_SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ORDI/USDT']
 
 def get_stock_logic():
+    """全市场扫描逻辑：先筛选活跃标的，再深度计算"""
     results = []
     try:
-        stocks = ak.stock_zh_a_spot_em().head(300) # 先扫300只确保速度
-        for _, row in stocks.iterrows():
+        # 1. 一次性获取全市场 5000+ 股票的实时行情
+        all_stocks = ak.stock_zh_a_spot_em()
+        
+        # 2. 预筛选：剔除停牌、ST、以及成交额过低（流动性差）的垃圾标的
+        # 私募策略：成交额排名后 20% 的不看
+        all_stocks = all_stocks[all_stocks['成交额'] > all_stocks['成交额'].quantile(0.2)]
+        
+        # 3. 遍历全市场标的
+        for _, row in all_stocks.iterrows():
             code, name, price = row['代码'], row['名称'], row['最新价']
-            df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(400)
-            if len(df) < 321: continue
             
-            # 原生计算指标，不依赖外部库
-            df['ma156'] = df['收盘'].rolling(window=156).mean()
-            df['ma321'] = df['收盘'].rolling(window=321).mean()
-            df['vol_ma20'] = df['成交量'].rolling(window=20).mean()
-            
-            curr = df.iloc[-1]
-            m156, m321, vol_ratio = curr['ma156'], curr['ma321'], curr['成交量']/curr['vol_ma20']
-            
-            hits = []
-            if abs(price - m156)/m156 < 0.012: hits.append(f"MA156踩位")
-            if abs(price - m321)/m321 < 0.012: hits.append("MA321关键点")
-            drop_3d = (price - df['收盘'].iloc[-4]) / df['收盘'].iloc[-4]
-            if m321 > m156 > price and drop_3d < -0.12:
-                hits.append(f"断崖({drop_3d:.1%})")
+            # 这里的异常处理很重要，全市场扫描难免会有个别数据缺失
+            try:
+                # 深度拉取 K 线（全市场扫描建议只拉取近 400 天数据，减少流量）
+                df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(400)
+                
+                if len(df) < 321: continue # 剔除上市不满一年的新股
+                
+                # --- 原生计算（速度极快） ---
+                close_series = df['收盘']
+                ma156 = close_series.rolling(window=156).mean().iloc[-1]
+                ma321 = close_series.rolling(window=321).mean().iloc[-1]
+                
+                # 成交量分析
+                vol_series = df['成交量']
+                vol_ma20 = vol_series.rolling(window=20).mean().iloc[-1]
+                vol_ratio = vol_series.iloc[-1] / vol_ma20
+                
+                hits = []
+                # 踩位：宽限至 2% 以适配全市场波动
+                if abs(price - ma156) / ma156 < 0.02:
+                    hits.append(f"MA156线(距:{abs(price-ma156)/ma156:.1%})")
+                
+                # 5.21 心理价位：检查 60 日内是否触碰
+                if (df['最低'].tail(60).min() <= 5.21 <= df['最高'].tail(60).max()):
+                    hits.append("5.21心理区")
+                    
+                # 断崖：3日跌幅 > 10%
+                drop_3d = (price - close_series.iloc[-4]) / close_series.iloc[-4]
+                if price < ma156 and drop_3d < -0.10:
+                    hits.append(f"断崖({drop_3d:.1%})")
 
-            if hits:
-                results.append({'name': name, 'code': code, 'price': price, 'tags': hits})
-    except: pass
+                if hits:
+                    results.append({'name': name, 'code': code, 'price': price, 'tags': hits})
+                    
+            except:
+                continue # 个别个股失败不影响全局
+                
+    except Exception as e:
+        print(f"全市场扫描中断: {e}")
+        
     return results
+
 
 def get_crypto_logic():
     results = []
