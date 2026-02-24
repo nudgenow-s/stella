@@ -8,61 +8,59 @@ TARGET_PRICES = [5.21, 52.1]
 CRYPTO_SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ORDI/USDT']
 
 def get_stock_logic():
-    """全市场扫描逻辑：先筛选活跃标的，再深度计算"""
     results = []
     try:
-        # 1. 一次性获取全市场 5000+ 股票的实时行情
+        # 获取全市场数据
         all_stocks = ak.stock_zh_a_spot_em()
         
-        # 2. 预筛选：剔除停牌、ST、以及成交额过低（流动性差）的垃圾标的
-        # 私募策略：成交额排名后 20% 的不看
-        all_stocks = all_stocks[all_stocks['成交额'] > all_stocks['成交额'].quantile(0.2)]
-        
-        # 3. 遍历全市场标的
-        for _, row in all_stocks.iterrows():
+        for index, row in all_stocks.iterrows():
             code, name, price = row['代码'], row['名称'], row['最新价']
             
-            # 这里的异常处理很重要，全市场扫描难免会有个别数据缺失
-            try:
-                # 深度拉取 K 线（全市场扫描建议只拉取近 400 天数据，减少流量）
-                df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(400)
-                
-                if len(df) < 321: continue # 剔除上市不满一年的新股
-                
-                # --- 原生计算（速度极快） ---
-                close_series = df['收盘']
-                ma156 = close_series.rolling(window=156).mean().iloc[-1]
-                ma321 = close_series.rolling(window=321).mean().iloc[-1]
-                
-                # 成交量分析
-                vol_series = df['成交量']
-                vol_ma20 = vol_series.rolling(window=20).mean().iloc[-1]
-                vol_ratio = vol_series.iloc[-1] / vol_ma20
-                
-                hits = []
-                # 踩位：宽限至 2% 以适配全市场波动
-                if abs(price - ma156) / ma156 < 0.02:
-                    hits.append(f"MA156线(距:{abs(price-ma156)/ma156:.1%})")
-                
-                # 5.21 心理价位：检查 60 日内是否触碰
-                if (df['最低'].tail(60).min() <= 5.21 <= df['最高'].tail(60).max()):
-                    hits.append("5.21心理区")
-                    
-                # 断崖：3日跌幅 > 10%
-                drop_3d = (price - close_series.iloc[-4]) / close_series.iloc[-4]
-                if price < ma156 and drop_3d < -0.10:
-                    hits.append(f"断崖({drop_3d:.1%})")
+            # 性能监控：每扫500只在Actions日志里打印一次
+            if index % 500 == 0: print(f"正在扫描第 {index} 只股票: {name}")
 
+            try:
+                # 拉取历史数据
+                df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(350)
+                if len(df) < 321: continue
+                
+                # 指标计算
+                ma156 = df['收盘'].rolling(window=156).mean().iloc[-1]
+                ma321 = df['收盘'].rolling(window=321).mean().iloc[-1]
+                
+                # --- 并行逻辑开始 ---
+                hits = []
+
+                # 指标1：断崖式下跌 (5天超过15%)
+                drop_5d = (price - df['收盘'].iloc[-6]) / df['收盘'].iloc[-6]
+                if drop_5d <= -0.15:
+                    hits.append(f"🚨断崖({drop_5d:.1%})")
+
+                # 指标2：156/321 均线踩位 (误差2%以内)
+                if abs(price - ma156) / ma156 < 0.02:
+                    hits.append("📏MA156踩位")
+                if abs(price - ma321) / ma321 < 0.02:
+                    hits.append("📏MA321踩位")
+
+                # 指标3：5.21/52.1 价格共振 (近期触碰过)
+                if any((df['最低'].tail(30) <= p) & (df['最高'].tail(30) >= p) for p in [5.21, 52.1]):
+                    hits.append("🎯5.21价格锚点")
+
+                # 并行汇总：只要命中任何一个，就加入结果集
                 if hits:
-                    results.append({'name': name, 'code': code, 'price': price, 'tags': hits})
+                    results.append({
+                        'name': name, 
+                        'code': code, 
+                        'price': price, 
+                        'tags': hits
+                    })
                     
             except:
-                continue # 个别个股失败不影响全局
-                
+                continue
     except Exception as e:
-        print(f"全市场扫描中断: {e}")
-        
+        print(f"扫描异常: {e}")
     return results
+
 
 
 def get_crypto_logic():
